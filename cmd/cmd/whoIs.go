@@ -3,9 +3,10 @@ package cmd
 import (
 	"fmt"
 	"github.com/BeatTime/bacnet"
+	"github.com/BeatTime/bacnet/btypes"
 	pprint "github.com/BeatTime/bacnet/helpers/print"
-	"github.com/BeatTime/bacnet/network"
 	"github.com/spf13/cobra"
+	"time"
 )
 
 // Flags
@@ -25,16 +26,25 @@ var whoIsCmd = &cobra.Command{
 
 func main(cmd *cobra.Command, args []string) {
 
-	client, err := network.New(&network.Network{Interface: Interface, Port: Port})
-	if err != nil {
-		fmt.Println("ERR-client", err)
-		return
-	}
-	defer client.NetworkClose(false)
-	go client.NetworkRun()
+	client, err := bacnet.NewClient(&bacnet.ClientBuilder{
+		Interface:  Interface,
+		Ip:         "10.245.3.254",
+		Port:       Port,
+		SubnetCIDR: 24,
+	})
+	defer client.ClientClose(false)
+	go client.ClientRun()
+
+	//networkInstance, err := network.New(&network.Network{Interface: Interface, Port: Port})
+	//if err != nil {
+	//	fmt.Println("ERR-networkInstance", err)
+	//	return
+	//}
+	//defer networkInstance.NetworkClose(false)
+	//go networkInstance.NetworkRun()
 
 	if runDiscover {
-		//device, err := network.NewDevice(client, &network.Device{Ip: deviceIP, Port: Port})
+		//device, err := network.NewDevice(networkInstance, &network.Device{Ip: deviceIP, Port: Port})
 		//err = device.DeviceDiscover()
 		fmt.Println(err)
 		return
@@ -47,7 +57,7 @@ func main(cmd *cobra.Command, args []string) {
 		NetworkNumber:   uint16(networkNumber),
 	}
 
-	whoIs, err := client.Whois(wi)
+	whoIs, err := client.WhoIs(wi)
 	if err != nil {
 		fmt.Println("ERR-whoIs", err)
 		return
@@ -55,13 +65,38 @@ func main(cmd *cobra.Command, args []string) {
 
 	pprint.PrintJOSN(whoIs)
 
-	whoIs, err = client.Whois(wi)
+	whoIs, err = client.WhoIs(wi)
 	if err != nil {
 		fmt.Println("ERR-whoIs", err)
 		return
 	}
 	fmt.Println("whois 2nd")
 	pprint.PrintJOSN(whoIs)
+
+	tmp := btypes.PropertyData{
+		Object: btypes.Object{
+			ID: btypes.ObjectID{
+				Type:     btypes.ObjectType(btypes.TypeAnalogInput),
+				Instance: btypes.ObjectInstance(0),
+			},
+			Properties: []btypes.Property{
+				{
+					Type:       btypes.PropPresentValue, // Present value
+					ArrayIndex: btypes.ArrayAll,
+				},
+			},
+		},
+	}
+	timer := time.NewTicker(5 * time.Second)
+	for {
+		<-timer.C
+		property, err := client.ReadProperty(whoIs[1], tmp)
+		if err != nil {
+			fmt.Println(err)
+		} else {
+			fmt.Println(property.Object.Properties[0].Data)
+		}
+	}
 }
 
 func init() {

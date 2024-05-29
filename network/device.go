@@ -46,8 +46,10 @@ func NewDevice(net *Network, device *Device) (*Device, error) {
 	}
 	device.network = net.bacnet
 	device.dev = *dev
-	if net.Store.BacStore != nil {
-		net.Store.BacStore.Set(device.StoreID, device, -1)
+	if net.Store != nil {
+		if net.Store.BacStore != nil {
+			net.Store.BacStore.Set(device.StoreID, device, -1)
+		}
 	}
 	return device, nil
 }

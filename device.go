@@ -3,6 +3,7 @@ package bacnet
 import (
 	"errors"
 	"fmt"
+	"github.com/BeatTime/bacnet/btypes/segmentation"
 	"io"
 	"sync"
 	"time"
@@ -39,20 +40,22 @@ type Client interface {
 }
 
 type client struct {
-	dataLink       datalink.DataLink
-	tsm            *tsm.TSM
-	utsm           *utsm.Manager
-	readBufferPool sync.Pool
-	log            *logrus.Logger
+	dataLink         datalink.DataLink
+	tsm              *tsm.TSM
+	utsm             *utsm.Manager
+	readBufferPool   sync.Pool
+	log              *logrus.Logger
+	deviceInstanceId uint32
 }
 
 type ClientBuilder struct {
-	DataLink   datalink.DataLink
-	Interface  string
-	Ip         string
-	Port       int
-	SubnetCIDR int
-	MaxPDU     uint16
+	DataLink         datalink.DataLink
+	Interface        string
+	Ip               string
+	Port             int
+	SubnetCIDR       int
+	MaxPDU           uint16
+	DeviceInstanceId uint32
 }
 
 // NewClient creates a new client with the given interface and
@@ -113,7 +116,8 @@ func NewClient(cb *ClientBuilder) (Client, error) {
 		readBufferPool: sync.Pool{New: func() interface{} {
 			return make([]byte, maxPDU)
 		}},
-		log: logger,
+		log:              logger,
+		deviceInstanceId: cb.DeviceInstanceId,
 	}
 	return cli, nil
 }
@@ -201,8 +205,29 @@ func (c *client) handleMsg(src *btypes.Address, b []byte) {
 				dec := encoding.NewDecoder(apdu.RawData)
 				var low, high int32
 				dec.WhoIs(&low, &high)
-				// For now we are going to ignore who is request.
-				//log.WithFields(log.Fields{"low": low, "high": high}).Debug("WHO IS Request")
+
+				reply := false
+				if low == -1 || high == -1 {
+					reply = true
+				} else if low <= int32(c.deviceInstanceId) && high >= int32(c.deviceInstanceId) {
+					reply = true
+				}
+
+				if reply {
+					iam := btypes.IAm{
+						ID: btypes.ObjectID{
+							Type:     btypes.TypeDeviceType,
+							Instance: btypes.ObjectInstance(718),
+						},
+						MaxApdu:      1476,
+						Segmentation: btypes.Enumerated(segmentation.NoSegmentation),
+						Vendor:       0,
+					}
+					err := c.IAm(*src, iam)
+					if err != nil {
+						c.log.Errorf("send I-AM failed err:%v", err)
+					}
+				}
 			} else {
 				c.log.Errorf("Unconfirmed: %d %v", apdu.UnconfirmedService, apdu.RawData)
 			}
@@ -219,8 +244,57 @@ func (c *client) handleMsg(src *btypes.Address, b []byte) {
 				return
 			}
 		case btypes.ConfirmedServiceRequest:
-			c.log.Debug("Received  Confirmed Service Request")
-			err := c.tsm.Send(int(apdu.InvokeId), send)
+			c.log.Debug("Received Confirmed Service Request")
+			if apdu.Service == btypes.ServiceConfirmedReadProperty {
+				// TODO response object-list
+				decoder := encoding.NewDecoder(apdu.RawData)
+				data := btypes.PropertyData{}
+				err := decoder.ReadProperty(&data)
+				if err != nil {
+					c.log.Errorf("decoder ReadProperty failed; %d %v err=%v", apdu.Service, apdu.RawData, err)
+					return
+				}
+				// 设备id + service=readProperty + object-list(76)
+				// ARRAY index = 0, 返回个数
+				// array index = 1, 返回第一个object
+				// array index = 2, 返回第二个object
+				encoder := encoding.NewEncoder()
+				// npdu
+				encoder.NPDU(&btypes.NPDU{
+					Version:     btypes.ProtocolVersion,
+					Destination: src,
+				})
+				// apdu
+				err = encoder.ReadPropertyAck(apdu.InvokeId, btypes.PropertyData{
+					Object: btypes.Object{
+						ID: data.Object.ID,
+						Properties: []btypes.Property{
+							{
+								Type:       btypes.PropObjectList,
+								ArrayIndex: data.Object.Properties[0].ArrayIndex,
+								Data:       uint32(1), // object个数
+							},
+						},
+					},
+				})
+				if err != nil {
+					c.log.Errorf("send failed err=%v", err)
+					return
+				}
+				bytes := encoder.Bytes()
+				c.log.Infof("%v", bytes)
+
+				_, err = c.Send(*src, nil, bytes, nil)
+				if err != nil {
+					c.log.Errorf("send failed err=%v", err)
+					return
+				}
+
+			} else if apdu.Service == btypes.ServiceConfirmedReadPropMultiple {
+				// TODO
+			} else {
+				c.log.Errorf("Confimed: %d %v", apdu.Service, apdu.RawData)
+			}
 			if err != nil {
 				return
 			}

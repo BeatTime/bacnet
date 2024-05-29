@@ -2,8 +2,8 @@ package cmd
 
 import (
 	"fmt"
-	"reflect"
 	"strconv"
+	"time"
 
 	"github.com/BeatTime/bacnet"
 	"github.com/BeatTime/bacnet/btypes"
@@ -66,7 +66,6 @@ func readProp(cmd *cobra.Command, args []string) {
 		for _, p := range points {
 			fmt.Println("pnt----------pnt----------", p.Name)
 			pprint.PrintJOSN(p)
-			//fmt.Println(p.ObjectType)
 		}
 		return
 	}
@@ -86,16 +85,25 @@ func readProp(cmd *cobra.Command, args []string) {
 		ArrayIndex: arrayIndex, //btypes.ArrayAll
 
 	}
-	read, err := device.Read(obj)
-	pprint.PrintJOSN(read)
-	fmt.Println(read.Object.Properties[0].Data)
 
-	arr := read.Object.Properties[0].Data.(*btypes.BitString)
-	for i, aa := range arr.GetValue() {
-		fmt.Println(i, aa)
-		fmt.Println("TYPE", reflect.TypeOf(aa))
+	ticker := time.NewTicker(1 * time.Second)
+	for {
+		<-ticker.C
+		read, err := device.Read(obj)
+		if err != nil {
+			fmt.Println(err)
+		} else {
+			//pprint.PrintJOSN(read)
+			fmt.Println(read.Object.Properties[0].Data)
+		}
 	}
-	fmt.Println("TYPE", reflect.TypeOf(read.Object.Properties[0].Data))
+
+	//arr := read.Object.Properties[0].Data.(*btypes.BitString)
+	//for i, aa := range arr.GetValue() {
+	//	fmt.Println(i, aa)
+	//	fmt.Println("TYPE", reflect.TypeOf(aa))
+	//}
+	//fmt.Println("TYPE", reflect.TypeOf(read.Object.Properties[0].Data))
 	//fmt.Println(1111, arr)
 	//for i, a := range arr {
 	//	fmt.Println(i, a)

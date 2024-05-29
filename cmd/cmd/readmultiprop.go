@@ -175,5 +175,4 @@ func init() {
 	readMultiCmd.Flags().IntVarP(&devicePort, "dport", "", 47808, "device port")
 	readMultiCmd.Flags().IntVarP(&networkNumber, "network", "", 0, "bacnet network number")
 	readMultiCmd.Flags().IntVarP(&deviceHardwareMac, "mstp", "", 0, "device hardware mstp addr")
-
 }
