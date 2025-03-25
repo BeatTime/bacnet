@@ -146,6 +146,11 @@ func (c *client) handleMsg(src *btypes.Address, b []byte) {
 		c.log.Error(err)
 		return
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			c.log.Errorf("handleMsg recover: %v", r)
+		}
+	}()
 
 	if header.Function == btypes.BacFuncBroadcast || header.Function == btypes.BacFuncUnicast || header.Function == btypes.BacFuncForwardedNPDU {
 		// Remove the header information
@@ -217,7 +222,7 @@ func (c *client) handleMsg(src *btypes.Address, b []byte) {
 					iam := btypes.IAm{
 						ID: btypes.ObjectID{
 							Type:     btypes.TypeDeviceType,
-							Instance: btypes.ObjectInstance(718),
+							Instance: btypes.ObjectInstance(c.deviceInstanceId),
 						},
 						MaxApdu:      1476,
 						Segmentation: btypes.Enumerated(segmentation.NoSegmentation),
@@ -246,57 +251,31 @@ func (c *client) handleMsg(src *btypes.Address, b []byte) {
 		case btypes.ConfirmedServiceRequest:
 			c.log.Debug("Received Confirmed Service Request")
 			if apdu.Service == btypes.ServiceConfirmedReadProperty {
-				// TODO response object-list
 				decoder := encoding.NewDecoder(apdu.RawData)
-				data := btypes.PropertyData{}
-				err := decoder.ReadProperty(&data)
+				propertyData := btypes.PropertyData{}
+				err := decoder.ReadProperty(&propertyData)
 				if err != nil {
 					c.log.Errorf("decoder ReadProperty failed; %d %v err=%v", apdu.Service, apdu.RawData, err)
 					return
 				}
-				// 设备id + service=readProperty + object-list(76)
-				// ARRAY index = 0, 返回个数
-				// array index = 1, 返回第一个object
-				// array index = 2, 返回第二个object
-				encoder := encoding.NewEncoder()
-				// npdu
-				encoder.NPDU(&btypes.NPDU{
-					Version:     btypes.ProtocolVersion,
-					Destination: src,
-				})
-				// apdu
-				err = encoder.ReadPropertyAck(apdu.InvokeId, btypes.PropertyData{
-					Object: btypes.Object{
-						ID: data.Object.ID,
-						Properties: []btypes.Property{
-							{
-								Type:       btypes.PropObjectList,
-								ArrayIndex: data.Object.Properties[0].ArrayIndex,
-								Data:       uint32(1), // object个数
-							},
-						},
-					},
-				})
+
+				if propertyData.Object.ID.Type == btypes.TypeDeviceType &&
+					propertyData.Object.ID.Instance == btypes.ObjectInstance(c.deviceInstanceId) {
+					err = handleDeviceReadProperty(c, src, apdu.InvokeId, propertyData)
+				} else if propertyData.Object.ID.Type == btypes.TypeAnalogInput &&
+					propertyData.Object.ID.Instance == btypes.ObjectInstance(1) {
+					err = handleAIReadProperty(c, src, apdu.InvokeId, propertyData)
+				}
 				if err != nil {
-					c.log.Errorf("send failed err=%v", err)
+					c.log.Errorf("handle failed err=%v", err)
 					return
 				}
-				bytes := encoder.Bytes()
-				c.log.Infof("%v", bytes)
-
-				_, err = c.Send(*src, nil, bytes, nil)
-				if err != nil {
-					c.log.Errorf("send failed err=%v", err)
-					return
-				}
-
 			} else if apdu.Service == btypes.ServiceConfirmedReadPropMultiple {
-				// TODO
+				decoder := encoding.NewDecoder(apdu.RawData)
+				multiPropertyData := &btypes.MultiplePropertyData{}
+				err = decoder.ReadMultipleProperty(multiPropertyData)
 			} else {
 				c.log.Errorf("Confimed: %d %v", apdu.Service, apdu.RawData)
-			}
-			if err != nil {
-				return
 			}
 		case btypes.Error:
 			err := fmt.Errorf("error class %s code %s", apdu.Error.Class.String(), apdu.Error.Code.String())
@@ -317,6 +296,73 @@ func (c *client) handleMsg(src *btypes.Address, b []byte) {
 		b = b[forwardHeaderLength:]
 		c.log.Debugf("Ignored NDPU Forwarded:%v", b)
 	}
+}
+
+func handleAIReadProperty(c *client, src *btypes.Address, id uint8, data btypes.PropertyData) error {
+	// TODO
+	return nil
+}
+
+func handleDeviceReadProperty(c *client, src *btypes.Address, invokeId uint8, data btypes.PropertyData) error {
+	// 设备id + service=readProperty + object-list(76)
+	// ARRAY index = 0, 返回个数
+	// array index = 1, 返回第一个object
+	// array index = 2, 返回第二个object
+	propertyType := data.Object.Properties[0].Type
+	index := data.Object.Properties[0].ArrayIndex
+
+	encoder := encoding.NewEncoder()
+	// npdu
+	encoder.NPDU(&btypes.NPDU{
+		Version:     btypes.ProtocolVersion,
+		Destination: src,
+	})
+
+	if propertyType == btypes.PropObjectList {
+		var err error = nil
+		if index == 0 {
+			// 发送index=0时的 object个数
+			err = encoder.ReadPropertyAck(invokeId, btypes.PropertyData{
+				Object: btypes.Object{
+					ID: data.Object.ID,
+					Properties: []btypes.Property{
+						{
+							Type:       btypes.PropObjectList,
+							ArrayIndex: index,
+							Data:       uint32(5), // object个数
+						},
+					},
+				},
+			})
+		} else if index > 0 {
+			// 发送index=1时的 AI-1
+			err = encoder.ReadPropertyAck(invokeId, btypes.PropertyData{
+				Object: btypes.Object{
+					ID: data.Object.ID,
+					Properties: []btypes.Property{
+						{
+							Type:       btypes.PropObjectList,
+							ArrayIndex: index,
+							Data: btypes.ObjectID{
+								Type:     btypes.AnalogInput,
+								Instance: btypes.ObjectInstance(index - 1),
+							},
+						},
+					},
+				},
+			})
+		}
+		if err != nil {
+			return err
+		}
+		// BVLC在send中会自行带上
+		_, err = c.Send(*src, nil, encoder.Bytes(), nil)
+		if err != nil {
+			return err
+		}
+
+	}
+	return nil
 }
 
 type SetBroadcastType struct { //used to override the header.Function

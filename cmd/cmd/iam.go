@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"fmt"
 	"github.com/BeatTime/bacnet"
 	"github.com/spf13/cobra"
 	"time"
@@ -21,7 +20,6 @@ var iam = &cobra.Command{
 
 func iamFunc(cmd *cobra.Command, args []string) {
 	client, err := bacnet.NewClient(&bacnet.ClientBuilder{
-		//Interface:  Interface,
 		Ip:               "0.0.0.0",
 		Port:             47808,
 		SubnetCIDR:       24,
@@ -36,7 +34,6 @@ func iamFunc(cmd *cobra.Command, args []string) {
 	ticker := time.NewTicker(1 * time.Second)
 	for {
 		<-ticker.C
-		fmt.Println("tick")
 	}
 }
 
